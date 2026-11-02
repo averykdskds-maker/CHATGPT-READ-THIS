@@ -1,0 +1,10 @@
+{
+  "required": true,
+  "package": "com.kib.aimbot.mixin",
+  "client": [
+    "MinecraftAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
