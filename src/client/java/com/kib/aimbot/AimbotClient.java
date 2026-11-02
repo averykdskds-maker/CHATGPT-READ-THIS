@@ -131,7 +131,7 @@ public final class AimbotClient implements ClientModInitializer {
 
     private static void onClientTick(Minecraft client) {
         tickCounter++;
-        if (!enabled || client.player == null || client.level == null || client.gameMode == null || client.screen != null) {
+        if (!enabled || client.player == null || client.level == null || client.gameMode == null) {
             return;
         }
 
