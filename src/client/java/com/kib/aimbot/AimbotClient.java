@@ -13,7 +13,9 @@ import net.minecraft.world.item.CrossbowItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
+import com.kib.aimbot.mixin.MinecraftAccessor;
 
 import java.util.Comparator;
 
@@ -246,17 +248,30 @@ public final class AimbotClient implements ClientModInitializer {
 
     private static void tryAutoAttack(Minecraft client, LocalPlayer player, Player target) {
         if (attackMode == AttackMode.OFF || !player.hasLineOfSight(target)) return;
-        if (player.getAttackStrengthScale(0.5F) < 0.92F) return;
 
-        double distance = player.distanceTo(target);
-        if (attackMode == AttackMode.HIT && distance > 3.2) return;
-        if (attackMode == AttackMode.CLICK && distance > 5.0) return;
+        // Match vanilla's input preconditions. Never attack while a screen is open
+        // or the game does not have mouse focus.
+        if (client.gui.screen() != null || !client.mouseHandler.isMouseGrabbed()) return;
 
-        int interval = Math.max(1, 20 / clicksPerSecond);
+        // Crucially, only request an attack when Minecraft's own current raycast
+        // has selected this exact player. The raycast applies normal entity reach.
+        if (!(client.hitResult instanceof EntityHitResult entityHit)
+                || entityHit.getEntity() != target) {
+            return;
+        }
+
+        if (player.isUsingItem() || player.getAttackStrengthScale(0.5F) < 0.92F) return;
+
+        // Auto-hit checks each tick; auto-click follows the configured attempt rate.
+        // Both use the same vanilla attack routine and therefore the same reach rules.
+        int interval = attackMode == AttackMode.HIT
+                ? 1
+                : Math.max(1, 20 / clicksPerSecond);
         if (tickCounter - lastAttackTick < interval) return;
 
-        client.gameMode.attack(player, target);
-        lastAttackTick = tickCounter;
+        if (((MinecraftAccessor) (Object) client).kib$invokeStartAttack()) {
+            lastAttackTick = tickCounter;
+        }
     }
 
     private static float wrapDegrees(float degrees) {
