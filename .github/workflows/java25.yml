@@ -1,23 +1,39 @@
-name: Java 25 Environment
+name: Build Kib Aimbot (Java 25)
 
 on:
   push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  setup:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out source
+        uses: actions/checkout@v7
 
-      - name: Install Java 25
+      - name: Set up Java 25
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '25'
 
-      - name: Verify Java
-        run: java --version
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.2.1'
+
+      - name: Build mod
+        run: gradle --no-daemon clean build
+
+      - name: Upload mod JAR
+        uses: actions/upload-artifact@v6
+        with:
+          name: kib-aimbot-mc26.3
+          path: build/libs/kib-aimbot-1.0.0.jar
+          if-no-files-found: error
