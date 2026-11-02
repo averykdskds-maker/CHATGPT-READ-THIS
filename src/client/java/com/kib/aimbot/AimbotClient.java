@@ -120,7 +120,7 @@ public final class AimbotClient implements ClientModInitializer {
                         feedback(context.getSource(), "Crossbow prediction enabled");
                         return 1;
                     }))
-                    .then(ClientCommands.literal("crossbow_off").executes(context -> {
+                    .then(ClientCommands.literal("off").executes(context -> {
                         crossbowAim = false;
                         feedback(context.getSource(), "Crossbow prediction disabled");
                         return 1;
