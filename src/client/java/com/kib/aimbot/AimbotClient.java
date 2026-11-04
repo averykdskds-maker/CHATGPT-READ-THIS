@@ -138,15 +138,11 @@ public final class AimbotClient implements ClientModInitializer {
     private static void onClientTick(Minecraft client) {
         tickCounter++;
 
-        if (client.player == null) {
+        if (client.player == null || client.gui.screen() != null) {
             return;
         }
 
         LocalPlayer player = client.player;
-
-        if (client.gui.screen() != null) {
-            return;
-        }
 
         while (toggleAimbotKey.consumeClick()) {
             enabled = !enabled;
@@ -163,7 +159,7 @@ public final class AimbotClient implements ClientModInitializer {
         }
 
         if (!enabled || client.level == null || client.gameMode == null) {
-                        return;
+            return;
         }
 
         ItemStack held = player.getMainHandItem();
@@ -173,17 +169,17 @@ public final class AimbotClient implements ClientModInitializer {
         // Wurst already handles bow aiming. Kib Aim deliberately does not
         // rotate for bows, or while the player is drawing one.
         if (holdingBow) {
-                        return;
+            return;
         }
 
         // Keep crossbow trajectory support independent from bow aiming.
         boolean projectileAim = holdingCrossbow && crossbowAim && CrossbowItem.isCharged(held);
         if (holdingCrossbow && !projectileAim) {
-                        return;
+            return;
         }
 
         // Do not pull the camera while eating, drinking, blocking, or using a
-        // healing item. Keep charged-crossbow tracking active while it is held.
+        // healing item. A charged crossbow can continue tracking while held.
         if (player.isUsingItem() && !projectileAim) {
             return;
         }
@@ -201,24 +197,22 @@ public final class AimbotClient implements ClientModInitializer {
         }
 
         if (manualOverrideActive) {
-            // Do not snap back to the target after the player deliberately
-            // looks away. Resume only when the player's own view returns close
-            // to the nearest target.
+            // Manual input suspends camera tracking. Reacquisition is based on
+            // the target centre, not the predicted projectile lead point.
             if (!isLookingAt(player, target)) {
-                                return;
+                return;
             }
             manualOverrideActive = false;
         }
 
-        // Auto-attacks are evaluated against the current vanilla hit result
-        // BEFORE this tick's camera rotation. This prevents an attack based on
-        // a newly-written rotation with a stale crosshair result.
+        // Auto-attack remains optional and OFF by default. It uses Minecraft's
+        // regular attack entry point; it does not manipulate network packets.
         if (!projectileAim) {
             tryAutoAttack(client, player, target);
         }
 
         rotateTowards(player, aimPoint);
-            }
+    }
 
     /**
      * Selects the closest eligible player by physical distance, not by how
