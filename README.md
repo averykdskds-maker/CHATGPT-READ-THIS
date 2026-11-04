@@ -2,18 +2,16 @@
 
 Client-side Fabric mod for **Minecraft Java 26.3**, **Fabric Loader 0.20.1+**, **Fabric API 0.165.0+26.3**, and **Java 25**.
 
-The GitHub Actions workflow builds the mod and uploads the compiled JAR as an artifact.
-
 ## Keybinds
 
-Open **Options → Controls → Key Binds → Kib Aimbot** to change either key:
+Open **Options → Controls → Key Binds → Kib Aimbot** to customise these controls:
 
 | Keybind | Default | Effect |
 |---|---:|---|
-| **Toggle Aimbot** | R | Turn target aiming on or off |
-| **Auto Aimbot Off / Resume** | V | Pause automatic aiming immediately, then press again to resume |
+| **Toggle Aimbot** | R | Turn automatic targeting and aiming on or off |
+| **Auto Aimbot Off / Manual Mouse Override** | V | Toggle whether manual mouse movement temporarily takes control |
 
-Pausing aim leaves the main aimbot setting enabled. It stops target selection, camera rotation, and automatic attacks until resumed. This is useful when disengaging, retreating, or healing.
+With Auto Aimbot Off enabled, moving the mouse away from the current nearest target suspends camera rotation and auto-attacks. Kib Aim does not snap back while the view is away. It resumes after you manually bring your view close to that same nearest target. Disable this mode to allow continuous automatic tracking.
 
 ## Commands
 
@@ -23,30 +21,29 @@ Enter these in Minecraft chat:
 |---|---|
 | `/aimbot on` | Enable target selection and aiming |
 | `/aimbot off` | Disable the mod |
-| `/aimbot pause on` / `/aimbot pause off` | Pause or resume automatic aiming |
+| `/aimbot autooff on` / `/aimbot autooff off` | Enable or disable manual mouse override |
+| `/aimbot attack on` / `/aimbot attack off` | Toggle the single vanilla-reach auto-attack feature |
 | `/aimbot status` | Show current settings |
-| `/aimbot range 48` | Set target search range (3–128 blocks; aiming only) |
-| `/aimbot fov 120` | Set target field of view (5–180 degrees) |
+| `/aimbot range 48` | Set nearest-player search range (3–128 blocks) |
 | `/aimbot smooth 65` | Set aim smoothing (1–100%; 100 is instant) |
-| `/aimbot click on` / `/aimbot click off` | Toggle auto-click attempts |
-| `/aimbot hit on` / `/aimbot hit off` | Toggle automatic hit attempts |
-| `/aimbot cps 8` | Set auto-click attempt rate (1–20 CPS) |
-| `/aimbot bow on` / `/aimbot bow off` | Toggle bow trajectory prediction |
 | `/aimbot crossbow on` / `/aimbot crossbow off` | Toggle crossbow trajectory prediction |
+
+The previous separate `click` and `hit` modes have been combined into one `attack` toggle. Bow aiming has been removed from Kib Aim; Wurst can handle bow aiming.
 
 ## Behaviour
 
-- Targets other visible, alive players. It ignores the local player, spectators, invisible players, and teammates/allies.
-- Selects a target inside the configured field of view and search range.
-- Leads moving targets using their current movement.
-- For drawn bows and loaded crossbows, estimates a trajectory using per-tick arrow drag, gravity, target movement, and the shooter's inherited movement.
-- Stops automatic aiming while the player is using a non-bow item, so eating, drinking, and using healing items do not keep pulling the camera toward a target.
-- Auto-click mode follows the configured attempt interval. Auto-hit checks every client tick.
-- **Every automatic melee attempt is gated by Minecraft's current vanilla crosshair hit result.** The mod only invokes the normal vanilla attack routine when the crosshair has selected the exact player currently being aimed at.
-- The vanilla attack routine applies the current item's attack-range rules. The mod does not modify attack reach or directly send an attack against an arbitrary entity.
-- Automatic attacks are suppressed while a GUI is open, the mouse is not grabbed, or the player is using an item. Vanilla attack cooldown is also respected.
+- Selects the **physically nearest eligible player** within the configured range, regardless of which player is closest to the crosshair.
+- Only considers players who are alive, visible, in line of sight, not invisible to you, and not teammates/allies.
+- Since target selection is distance-based rather than crosshair/FOV-based, the nearest eligible player can be behind you; the camera may turn around to that player when automatic aiming is active.
+- Manual mouse override can stop tracking and attacks until you manually bring your view back close to the nearest target.
+- Bow aiming is intentionally not implemented. When holding a bow, Kib Aim leaves the camera alone so Wurst can provide that feature.
+- Charged crossbow prediction remains available and estimates target movement, arrow drag, gravity, and shooter movement.
+- Automatic melee attacks are optional and disabled by default.
+- **Every automatic melee attempt is gated by Minecraft's current vanilla crosshair hit result.** The mod only calls the normal vanilla attack routine when the current hit result is the selected nearest player.
+- The vanilla attack routine applies the ordinary item cooldown and interaction-range rules. The mod does not increase reach or send direct entity attack packets.
+- Automatic attacks are suppressed during GUIs, when the mouse is not grabbed, while using an item, and during manual mouse override.
 
-The target search range controls aiming only. It does not increase attack range. A server may still apply stricter validation or prohibit automated aiming and attacks.
+The search range controls target selection only; it does not increase attack reach. A vanilla crosshair check is not a promise that an anti-cheat will permit automated attacks or rotations. GrimAC can still flag automated behaviour, and this mod does not attempt to bypass or conceal anti-cheat detections.
 
 ## Build
 
@@ -56,18 +53,15 @@ Requires JDK 25 and Gradle 9.8.0:
 gradle --no-daemon clean build
 ```
 
-The JAR is generated in `build/libs/kib-aimbot-1.0.2.jar`.
+The JAR is generated in `build/libs/kib-aimbot-1.0.3.jar`.
 
 ## Install
 
-1. Download the `kib-aimbot-mc26.3-v1.0.2` artifact from the repository's **Actions** workflow.
+1. Download the `kib-aimbot-mc26.3-v1.0.3` artifact from the repository's **Actions** workflow.
 2. Extract the JAR from the artifact ZIP.
 3. Put the JAR in the Minecraft instance's `mods` folder alongside Fabric API.
 4. Remove the older Kib Aimbot JAR first.
 5. Launch Minecraft 26.3 using Java 25.
 
-This is a client mod; it is not installed on a dedicated server. Servers may restrict or prohibit automated aiming and attacks, and their anti-cheat systems can still detect or reject them.
+This is a client mod; it is not installed on a dedicated server. Automated aiming and attacks may be restricted by servers and their anti-cheat systems.
 
-## Limitations
-
-Projectile prediction uses a movement estimate. Sudden direction changes, latency, potion effects, server-specific projectile physics, and movement corrections can still affect the result. The mod does not attempt to bypass anti-cheat protections.
