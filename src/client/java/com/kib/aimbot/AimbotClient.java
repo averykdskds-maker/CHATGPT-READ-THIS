@@ -261,6 +261,7 @@ public final class AimbotClient implements ClientModInitializer {
                 candidate != player
                     && candidate.isAlive()
                     && !candidate.isSpectator()
+                    && player.distanceToSqr(candidate) <= (double) range * range
                     && player.hasLineOfSight(candidate)
                     && !candidate.isInvisibleTo(player)
                     && !player.isAlliedTo(candidate)
