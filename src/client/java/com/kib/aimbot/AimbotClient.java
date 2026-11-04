@@ -29,7 +29,7 @@ public final class AimbotClient implements ClientModInitializer {
     private static final int MAX_PROJECTILE_FLIGHT_TICKS = 100;
 
     private static final float MANUAL_MOUSE_THRESHOLD_DEGREES = 1.5F;
-    private static final double MANUAL_REACQUIRE_COS = Math.cos(Math.toRadians(8.0));
+    private static final double MANUAL_REACQUIRE_COS = Math.cos(Math.toRadians(20.0));
 
     private static final KeyMapping.Category KEY_CATEGORY = KeyMapping.Category.register(
         Identifier.fromNamespaceAndPath("kib_aimbot", "controls")
@@ -231,7 +231,7 @@ public final class AimbotClient implements ClientModInitializer {
             // Do not snap back to the target after the player deliberately
             // looks away. Resume only when the player's own view returns close
             // to the nearest target.
-            if (!isLookingAt(player, aimPoint)) {
+            if (!isLookingAt(player, target)) {
                 recordObservedRotation(player);
                 return;
             }
@@ -270,8 +270,11 @@ public final class AimbotClient implements ClientModInitializer {
             .orElse(null);
     }
 
-    private static boolean isLookingAt(LocalPlayer player, Vec3 targetPoint) {
-        Vec3 direction = targetPoint.subtract(player.getEyePosition()).normalize();
+    private static boolean isLookingAt(LocalPlayer player, Player target) {
+        // Reacquire against the opponent's visible centre, not the calculated
+        // ballistic aim point (which can sit above the target).
+        Vec3 targetCentre = target.position().add(0.0, target.getBbHeight() * 0.55, 0.0);
+        Vec3 direction = targetCentre.subtract(player.getEyePosition()).normalize();
         Vec3 look = player.getViewVector(1.0F).normalize();
         return look.dot(direction) >= MANUAL_REACQUIRE_COS;
     }
@@ -286,6 +289,12 @@ public final class AimbotClient implements ClientModInitializer {
         }
 
         Vec3 origin = shooter.getEyePosition();
+        Vec3 directDisplacement = targetPoint.subtract(origin);
+        double distance = directDisplacement.length();
+        if (distance < 1.0E-4) {
+            return targetPoint;
+        }
+
         Vec3 targetVelocity = target.getDeltaMovement();
         Vec3 shooterVelocity = shooter.getDeltaMovement();
 
@@ -295,12 +304,20 @@ public final class AimbotClient implements ClientModInitializer {
             shooterVelocity.z
         );
 
+        // Do not search arbitrarily long flight times. At short ranges, the old
+        // solver could choose a near-vertical "shoot upward and wait" arc when
+        // there was no useful direct ballistic solution.
+        int maxFlightTicks = Math.min(
+            MAX_PROJECTILE_FLIGHT_TICKS,
+            Math.max(4, (int) Math.ceil(distance / Math.max(0.5, launchSpeed * 0.6)) + 8)
+        );
+
         double dragSum = 0.0;
         double dragMultiplier = 1.0;
         double bestSpeedError = Double.MAX_VALUE;
-        Vec3 bestDirection = targetPoint.subtract(origin).normalize();
+        Vec3 bestDirection = null;
 
-        for (int flightTicks = 1; flightTicks <= MAX_PROJECTILE_FLIGHT_TICKS; flightTicks++) {
+        for (int flightTicks = 1; flightTicks <= maxFlightTicks; flightTicks++) {
             dragSum += dragMultiplier;
             dragMultiplier *= PROJECTILE_DRAG;
 
@@ -316,16 +333,31 @@ public final class AimbotClient implements ClientModInitializer {
                 .subtract(0.0, gravityDrop, 0.0);
 
             Vec3 requiredLaunchVelocity = requiredDisplacement.scale(1.0 / dragSum);
-            double speedError = Math.abs(requiredLaunchVelocity.length() - launchSpeed);
+            double requiredSpeed = requiredLaunchVelocity.length();
+            if (requiredSpeed <= 1.0E-8) {
+                continue;
+            }
 
-            if (speedError < bestSpeedError && requiredLaunchVelocity.lengthSqr() > 1.0E-8) {
+            double pitch = Math.toDegrees(Math.asin(
+                Math.max(-1.0, Math.min(1.0, requiredLaunchVelocity.y / requiredSpeed))
+            ));
+            if (Math.abs(pitch) > 55.0) {
+                continue;
+            }
+
+            double speedError = Math.abs(requiredSpeed - launchSpeed);
+            if (speedError < bestSpeedError) {
                 bestSpeedError = speedError;
-                bestDirection = requiredLaunchVelocity.normalize();
+                bestDirection = requiredLaunchVelocity.scale(1.0 / requiredSpeed);
             }
+        }
 
-            if (speedError <= Math.max(0.02, launchSpeed * 0.005)) {
-                break;
-            }
+        // Only use a ballistic solution when its required launch speed is
+        // reasonably close to the crossbow's actual launch speed. Otherwise,
+        // aim directly at the opponent instead of selecting an absurd arc.
+        double acceptableSpeedError = Math.max(0.12, launchSpeed * 0.10);
+        if (bestDirection == null || bestSpeedError > acceptableSpeedError) {
+            return targetPoint;
         }
 
         return origin.add(bestDirection.scale(16.0));
