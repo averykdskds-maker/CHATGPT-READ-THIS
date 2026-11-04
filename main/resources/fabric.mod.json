@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "kib_aimbot",
+  "version": "${version}",
+  "name": "Kib Aimbot",
+  "description": "Configurable client-side aim assistance for Minecraft 26.3.",
+  "authors": ["Kib"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.kib.aimbot.AimbotClient"
+    ]
+  },
+  "mixins": [
+    {
+      "config": "kib_aimbot.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.20.1",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": "*",
+    "fabric-key-mapping-api-v1": "*"
+  }
+}
