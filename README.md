@@ -11,7 +11,7 @@ Open **Options → Controls → Key Binds → Kib Aimbot** to customise these co
 | **Toggle Aimbot** | R | Turn automatic targeting and aiming on or off |
 | **Auto Aimbot Off / Manual Mouse Override** | V | Toggle whether manual mouse movement temporarily takes control |
 
-With Auto Aimbot Off enabled, moving the mouse away from the current nearest target suspends camera rotation and auto-attacks. Kib Aim does not snap back while the view is away. It resumes on the first client tick when your view is within roughly 20 degrees of that nearest target. Disable this mode to allow continuous automatic tracking.
+With Auto Aimbot Off enabled, actual mouse movement suspends camera rotation. Kib Aim reads the mouse's input deltas directly, so its own camera movement while tracking a moving target cannot trigger the override. It resumes when your view returns within roughly 20 degrees of the nearest target. Disable this mode to allow continuous automatic tracking.
 
 ## Commands
 
@@ -37,11 +37,11 @@ The previous separate `click` and `hit` modes have been combined into one `attac
 - Since target selection is distance-based rather than crosshair/FOV-based, the nearest eligible player can be behind you; the camera may turn around to that player when automatic aiming is active.
 - Manual mouse override can stop tracking and attacks until you manually bring your view back close to the nearest target.
 - Bow aiming is intentionally not implemented. When holding a bow, Kib Aim leaves the camera alone so Wurst can provide that feature.
-- Charged crossbow prediction remains available and estimates target movement, arrow drag, gravity, and shooter movement. If a sensible ballistic solution is unavailable, it falls back to aiming directly at the opponent instead of choosing a high-arcing shot.
+- Charged crossbow prediction is recalculated every client tick. It estimates target movement, arrow drag, gravity, and shooter movement, clamps implausible target-velocity samples, and searches around a plausible low-arc flight time. If no credible low-arc solution is found, it aims at the opponent's centre.
 - Automatic melee attacks are optional and disabled by default.
 - **Every automatic melee attempt is gated by Minecraft's current vanilla crosshair hit result.** The mod only calls the normal vanilla attack routine when the current hit result is the selected nearest player.
 - The vanilla attack routine applies the ordinary item cooldown and interaction-range rules. The mod does not increase reach or send direct entity attack packets.
-- Automatic attacks are suppressed during GUIs, when the mouse is not grabbed, while using an item, and during manual mouse override.
+- Automatic attacks are suppressed during GUIs, when the mouse is not grabbed, while using an item, and during manual mouse override. Auto-attack is disabled by default; do not enable it on multiplayer servers unless the server owner has explicitly permitted automated attacks.
 
 The search range controls target selection only; it does not increase attack reach. A vanilla crosshair check is not a promise that an anti-cheat will permit automated attacks or rotations. GrimAC and Vulcan can still flag automated aiming or attacks. This mod does not attempt to bypass or conceal anti-cheat detections; use it only in single-player or on servers where the owner explicitly permits it.
 
@@ -53,11 +53,11 @@ Requires JDK 25 and Gradle 9.8.0:
 gradle --no-daemon clean build
 ```
 
-The JAR is generated in `build/libs/kib-aimbot-1.0.4.jar`.
+The JAR is generated in `build/libs/kib-aimbot-1.0.5.jar`.
 
 ## Install
 
-1. Download the `kib-aimbot-mc26.3-v1.0.4` artifact from the repository's **Actions** workflow.
+1. Download the `kib-aimbot-mc26.3-v1.0.5` artifact from the repository's **Actions** workflow.
 2. Extract the JAR from the artifact ZIP.
 3. Put the JAR in the Minecraft instance's `mods` folder alongside Fabric API.
 4. Remove the older Kib Aimbot JAR first.
