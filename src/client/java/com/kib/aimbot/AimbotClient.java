@@ -1,13 +1,18 @@
 package com.kib.aimbot;
 
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.blaze3d.platform.InputConstants;
+import com.kib.aimbot.mixin.MinecraftAccessor;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.CrossbowItem;
 import net.minecraft.world.item.ItemStack;
@@ -15,7 +20,6 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
-import com.kib.aimbot.mixin.MinecraftAccessor;
 
 import java.util.Comparator;
 
@@ -24,7 +28,19 @@ public final class AimbotClient implements ClientModInitializer {
         OFF, CLICK, HIT
     }
 
+    private static final double PROJECTILE_DRAG = 0.99;
+    private static final double ARROW_GRAVITY = 0.05;
+    private static final int MAX_PROJECTILE_FLIGHT_TICKS = 100;
+
+    private static final KeyMapping.Category KEY_CATEGORY = KeyMapping.Category.register(
+        Identifier.fromNamespaceAndPath("kib_aimbot", "controls")
+    );
+
+    private static KeyMapping toggleAimbotKey;
+    private static KeyMapping pauseAimKey;
+
     private static boolean enabled = false;
+    private static boolean aimPaused = false;
     private static boolean bowAim = true;
     private static boolean crossbowAim = true;
     private static AttackMode attackMode = AttackMode.OFF;
@@ -38,19 +54,45 @@ public final class AimbotClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        toggleAimbotKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+            "key.kib_aimbot.toggle",
+            InputConstants.Type.KEYBOARD,
+            InputConstants.KEY_R,
+            KEY_CATEGORY
+        ));
+        pauseAimKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+            "key.kib_aimbot.pause",
+            InputConstants.Type.KEYBOARD,
+            InputConstants.KEY_V,
+            KEY_CATEGORY
+        ));
+
         ClientTickEvents.END_CLIENT_TICK.register(AimbotClient::onClientTick);
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             dispatcher.register(ClientCommands.literal("aimbot")
                 .then(ClientCommands.literal("on").executes(context -> {
                     enabled = true;
+                    aimPaused = false;
                     feedback(context.getSource(), "Aimbot enabled");
                     return 1;
                 }))
                 .then(ClientCommands.literal("off").executes(context -> {
                     enabled = false;
+                    aimPaused = false;
                     feedback(context.getSource(), "Aimbot disabled");
                     return 1;
                 }))
+                .then(ClientCommands.literal("pause")
+                    .then(ClientCommands.literal("on").executes(context -> {
+                        aimPaused = true;
+                        feedback(context.getSource(), "Automatic aiming paused");
+                        return 1;
+                    }))
+                    .then(ClientCommands.literal("off").executes(context -> {
+                        aimPaused = false;
+                        feedback(context.getSource(), "Automatic aiming resumed");
+                        return 1;
+                    })))
                 .then(ClientCommands.literal("status").executes(context -> {
                     feedback(context.getSource(), status());
                     return 1;
@@ -133,7 +175,25 @@ public final class AimbotClient implements ClientModInitializer {
 
     private static void onClientTick(Minecraft client) {
         tickCounter++;
-        if (!enabled || client.player == null || client.level == null || client.gameMode == null) {
+
+        // Key mappings are handled only while the game is in-world, not while a
+        // menu or the Controls screen is consuming keyboard input.
+        if (client.gui.screen() == null) {
+            while (toggleAimbotKey.consumeClick()) {
+                enabled = !enabled;
+                if (enabled) aimPaused = false;
+                notifyPlayer(client, "Aimbot " + (enabled ? "enabled" : "disabled"));
+            }
+
+            while (pauseAimKey.consumeClick()) {
+                aimPaused = !aimPaused;
+                notifyPlayer(client, aimPaused
+                    ? "Auto aimbot OFF — press again to resume"
+                    : "Auto aimbot ON");
+            }
+        }
+
+        if (!enabled || aimPaused || client.player == null || client.level == null || client.gameMode == null) {
             return;
         }
 
@@ -141,11 +201,19 @@ public final class AimbotClient implements ClientModInitializer {
         ItemStack held = player.getMainHandItem();
         boolean holdingBow = held.is(Items.BOW);
         boolean holdingCrossbow = held.is(Items.CROSSBOW);
+        boolean drawingBow = holdingBow && player.isUsingItem() && player.getUseItem().is(Items.BOW);
+
+        // Let the player eat, drink, block, or use a healing item without the
+        // camera being pulled back toward a nearby target. Drawing a bow remains
+        // eligible for projectile prediction.
+        if (player.isUsingItem() && !drawingBow) {
+            return;
+        }
 
         boolean projectileAim = false;
         double projectileSpeed = 0.0;
 
-        if (holdingBow && bowAim && player.isUsingItem() && player.getUseItem().is(Items.BOW)) {
+        if (drawingBow && bowAim) {
             double draw = Math.min(1.0, player.getTicksUsingItem() / 20.0);
             double power = (draw * draw + 2.0 * draw) / 3.0;
             projectileSpeed = power * 3.0;
@@ -163,7 +231,7 @@ public final class AimbotClient implements ClientModInitializer {
         Player target = findTarget(client, player);
         if (target == null) return;
 
-        Vec3 aimPoint = target.position().add(0.0, target.getBbHeight() * 0.78, 0.0);
+        Vec3 aimPoint = target.position().add(0.0, target.getBbHeight() * 0.55, 0.0);
         if (projectileAim) {
             aimPoint = predictProjectileAim(player, target, aimPoint, projectileSpeed);
         }
@@ -191,7 +259,7 @@ public final class AimbotClient implements ClientModInitializer {
             ).stream()
             .filter(candidate -> {
                 Vec3 direction = candidate.position()
-                    .add(0.0, candidate.getBbHeight() * 0.65, 0.0)
+                    .add(0.0, candidate.getBbHeight() * 0.55, 0.0)
                     .subtract(eye)
                     .normalize();
                 return direction.dot(look) >= minimumDot;
@@ -202,7 +270,7 @@ public final class AimbotClient implements ClientModInitializer {
 
     private static double targetScore(LocalPlayer player, Player target, Vec3 eye, Vec3 look) {
         Vec3 direction = target.position()
-            .add(0.0, target.getBbHeight() * 0.65, 0.0)
+            .add(0.0, target.getBbHeight() * 0.55, 0.0)
             .subtract(eye)
             .normalize();
         double angleCost = 1.0 - Math.max(-1.0, Math.min(1.0, direction.dot(look)));
@@ -210,23 +278,67 @@ public final class AimbotClient implements ClientModInitializer {
     }
 
     /**
-     * Leads the target by its velocity relative to the shooter and compensates for
-     * the arrow's approximate gravity and air drag. Time is estimated in game ticks.
+     * Solves the arrow's discrete flight path over candidate flight times.
+     *
+     * The calculation includes per-tick air drag, gravity, target motion, and
+     * the velocity inherited from the shooter. It chooses the reachable flight
+     * time whose required launch speed is closest to the bow's actual charge.
      */
     private static Vec3 predictProjectileAim(LocalPlayer shooter, Player target, Vec3 targetPoint, double launchSpeed) {
-        double distance = shooter.getEyePosition().distanceTo(targetPoint);
-        double travelled = 0.0;
-        int flightTicks = 1;
-
-        for (; flightTicks < 80; flightTicks++) {
-            travelled += launchSpeed * Math.pow(0.99, flightTicks - 1);
-            if (travelled >= distance) break;
+        if (!Double.isFinite(launchSpeed) || launchSpeed <= 0.05) {
+            return targetPoint;
         }
 
-        Vec3 relativeVelocity = target.getDeltaMovement().subtract(shooter.getDeltaMovement());
-        Vec3 lead = targetPoint.add(relativeVelocity.scale(flightTicks));
-        double gravityCompensation = 0.5 * 0.05 * flightTicks * flightTicks;
-        return lead.add(0.0, gravityCompensation, 0.0);
+        Vec3 origin = shooter.getEyePosition();
+        Vec3 targetVelocity = target.getDeltaMovement();
+        Vec3 shooterVelocity = shooter.getDeltaMovement();
+
+        // Vanilla arrows inherit the shooter's horizontal motion, and inherit
+        // vertical motion only while airborne.
+        Vec3 inheritedVelocity = new Vec3(
+            shooterVelocity.x,
+            shooter.onGround() ? 0.0 : shooterVelocity.y,
+            shooterVelocity.z
+        );
+
+        double dragSum = 0.0;
+        double dragMultiplier = 1.0;
+        double bestSpeedError = Double.MAX_VALUE;
+        Vec3 bestDirection = targetPoint.subtract(origin).normalize();
+
+        for (int flightTicks = 1; flightTicks <= MAX_PROJECTILE_FLIGHT_TICKS; flightTicks++) {
+            dragSum += dragMultiplier;
+            dragMultiplier *= PROJECTILE_DRAG;
+
+            // Gravity acts after the first movement step. This sums its
+            // accumulated displacement while respecting the same air drag.
+            double gravityDrop = -ARROW_GRAVITY / (1.0 - PROJECTILE_DRAG)
+                * (flightTicks - dragSum);
+
+            Vec3 futureTarget = targetPoint.add(targetVelocity.scale(flightTicks));
+            Vec3 inheritedDisplacement = inheritedVelocity.scale(dragSum);
+
+            Vec3 requiredDisplacement = futureTarget
+                .subtract(origin)
+                .subtract(inheritedDisplacement)
+                .subtract(0.0, gravityDrop, 0.0);
+
+            Vec3 requiredLaunchVelocity = requiredDisplacement.scale(1.0 / dragSum);
+            double speedError = Math.abs(requiredLaunchVelocity.length() - launchSpeed);
+
+            if (speedError < bestSpeedError && requiredLaunchVelocity.lengthSqr() > 1.0E-8) {
+                bestSpeedError = speedError;
+                bestDirection = requiredLaunchVelocity.normalize();
+            }
+
+            // Prefer the first close solution, which is normally the flatter
+            // trajectory rather than a needlessly high arc.
+            if (speedError <= Math.max(0.02, launchSpeed * 0.005)) {
+                break;
+            }
+        }
+
+        return origin.add(bestDirection.scale(16.0));
     }
 
     private static void rotateTowards(LocalPlayer player, Vec3 target) {
@@ -253,8 +365,8 @@ public final class AimbotClient implements ClientModInitializer {
         // or the game does not have mouse focus.
         if (client.gui.screen() != null || !client.mouseHandler.isMouseGrabbed()) return;
 
-        // Crucially, only request an attack when Minecraft's own current raycast
-        // has selected this exact player. The raycast applies normal entity reach.
+        // Only request an attack when Minecraft's own current raycast has
+        // selected this exact player. Normal vanilla reach checks still apply.
         if (!(client.hitResult instanceof EntityHitResult entityHit)
                 || entityHit.getEntity() != target) {
             return;
@@ -262,8 +374,6 @@ public final class AimbotClient implements ClientModInitializer {
 
         if (player.isUsingItem() || player.getAttackStrengthScale(0.5F) < 0.92F) return;
 
-        // Auto-hit checks each tick; auto-click follows the configured attempt rate.
-        // Both use the same vanilla attack routine and therefore the same reach rules.
         int interval = attackMode == AttackMode.HIT
                 ? 1
                 : Math.max(1, 20 / clicksPerSecond);
@@ -271,6 +381,12 @@ public final class AimbotClient implements ClientModInitializer {
 
         if (((MinecraftAccessor) (Object) client).kib$invokeStartAttack()) {
             lastAttackTick = tickCounter;
+        }
+    }
+
+    private static void notifyPlayer(Minecraft client, String message) {
+        if (client.player != null) {
+            client.player.sendSystemMessage(Component.literal("[Kib Aimbot] " + message));
         }
     }
 
@@ -283,6 +399,7 @@ public final class AimbotClient implements ClientModInitializer {
 
     private static String status() {
         return "Aimbot " + (enabled ? "ON" : "OFF")
+            + " | aim " + (aimPaused ? "PAUSED" : "ACTIVE")
             + " | range " + range
             + " | FOV " + fov
             + " | smooth " + smoothPercent + "%"
