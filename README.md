@@ -16,6 +16,8 @@ Enter these in Minecraft chat:
 | `/aimbot range 48` | Set target search range (3–128 blocks; aiming only) |
 | `/aimbot fov 120` | Set target field of view (5–180 degrees) |
 | `/aimbot smooth 65` | Set aim smoothing (1–100%; 100 is instant) |
+| `/aimbot camera 50` | Reduce manual mouse-look sensitivity to 50% of its original setting (1–100%) |
+| `/aimbot camera reset` | Restore the original manual mouse-look sensitivity |
 | `/aimbot click on` / `/aimbot click off` | Toggle auto-click attempts |
 | `/aimbot hit on` / `/aimbot hit off` | Toggle automatic hit attempts |
 | `/aimbot cps 8` | Set auto-click attempt rate (1–20 CPS) |
@@ -26,6 +28,7 @@ Enter these in Minecraft chat:
 
 - Targets other visible, alive players. It ignores the local player, spectators, invisible players, and teammates/allies.
 - Selects a target inside the configured field of view and search range.
+- The separate `camera` command changes Minecraft's vanilla mouse sensitivity for manual camera movement; it does not change automated target rotation.
 - Leads moving targets using their relative movement.
 - For drawn bows and loaded crossbows, estimates projectile travel time, arrow drag, and gravity to aim ahead of the target.
 - Auto-click mode follows the configured attempt interval. Auto-hit checks every client tick.
@@ -43,11 +46,11 @@ Requires JDK 25 and Gradle 9.8.0:
 gradle --no-daemon clean build
 ```
 
-The JAR is generated in `build/libs/kib-aimbot-1.0.1.jar`.
+The JAR is generated in `build/libs/kib-aimbot-1.0.2.jar`.
 
 ## Install
 
-1. Download the `kib-aimbot-mc26.3-v1.0.1` artifact from the repository's **Actions** workflow.
+1. Download the `kib-aimbot-mc26.3-v1.0.2` artifact from the repository's **Actions** workflow.
 2. Extract the JAR from the artifact ZIP.
 3. Put the JAR in the Minecraft instance's `mods` folder alongside Fabric API.
 4. Remove the older `kib-aimbot-1.0.0.jar` first.
