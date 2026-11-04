@@ -28,7 +28,6 @@ public final class AimbotClient implements ClientModInitializer {
     private static final double ARROW_GRAVITY = 0.05;
     private static final int MAX_PROJECTILE_FLIGHT_TICKS = 100;
 
-    private static final float MANUAL_MOUSE_THRESHOLD_DEGREES = 1.5F;
     private static final double MANUAL_REACQUIRE_COS = Math.cos(Math.toRadians(20.0));
 
     private static final KeyMapping.Category KEY_CATEGORY = KeyMapping.Category.register(
@@ -48,10 +47,6 @@ public final class AimbotClient implements ClientModInitializer {
     private static int smoothPercent = 65;
     private static int tickCounter = 0;
     private static int lastAttackTick = -100;
-
-    private static boolean hasObservedRotation = false;
-    private static float lastObservedYaw;
-    private static float lastObservedPitch;
 
     @Override
     public void onInitializeClient() {
@@ -74,14 +69,12 @@ public final class AimbotClient implements ClientModInitializer {
                 .then(ClientCommands.literal("on").executes(context -> {
                     enabled = true;
                     manualOverrideActive = false;
-                    hasObservedRotation = false;
                     feedback(context.getSource(), "Aimbot enabled");
                     return 1;
                 }))
                 .then(ClientCommands.literal("off").executes(context -> {
                     enabled = false;
                     manualOverrideActive = false;
-                    hasObservedRotation = false;
                     feedback(context.getSource(), "Aimbot disabled");
                     return 1;
                 }))
@@ -89,15 +82,13 @@ public final class AimbotClient implements ClientModInitializer {
                     .then(ClientCommands.literal("on").executes(context -> {
                         autoAimOffEnabled = true;
                         manualOverrideActive = false;
-                        hasObservedRotation = false;
-                        feedback(context.getSource(), "Manual mouse override enabled");
+                            feedback(context.getSource(), "Manual mouse override enabled");
                         return 1;
                     }))
                     .then(ClientCommands.literal("off").executes(context -> {
                         autoAimOffEnabled = false;
                         manualOverrideActive = false;
-                        hasObservedRotation = false;
-                        feedback(context.getSource(), "Manual mouse override disabled");
+                            feedback(context.getSource(), "Manual mouse override disabled");
                         return 1;
                     })))
                 .then(ClientCommands.literal("attack")
@@ -148,46 +139,31 @@ public final class AimbotClient implements ClientModInitializer {
         tickCounter++;
 
         if (client.player == null) {
-            hasObservedRotation = false;
             return;
         }
 
         LocalPlayer player = client.player;
 
-        // Detect actual camera movement between ticks. While manual override is
-        // enabled, player input takes priority over automated rotation.
-        if (hasObservedRotation && autoAimOffEnabled) {
-            float yawInput = Math.abs(wrapDegrees(player.getYRot() - lastObservedYaw));
-            float pitchInput = Math.abs(player.getXRot() - lastObservedPitch);
-            if (Math.hypot(yawInput, pitchInput) >= MANUAL_MOUSE_THRESHOLD_DEGREES) {
-                manualOverrideActive = true;
-            }
-        }
-
         if (client.gui.screen() != null) {
-            recordObservedRotation(player);
             return;
         }
 
         while (toggleAimbotKey.consumeClick()) {
             enabled = !enabled;
             manualOverrideActive = false;
-            hasObservedRotation = false;
             notifyPlayer(client, "Aimbot " + (enabled ? "enabled" : "disabled"));
         }
 
         while (autoAimOffKey.consumeClick()) {
             autoAimOffEnabled = !autoAimOffEnabled;
             manualOverrideActive = false;
-            hasObservedRotation = false;
             notifyPlayer(client, autoAimOffEnabled
                 ? "Auto Aimbot Off enabled — manual mouse movement overrides aiming"
                 : "Auto Aimbot Off disabled — continuous aiming enabled");
         }
 
         if (!enabled || client.level == null || client.gameMode == null) {
-            recordObservedRotation(player);
-            return;
+                        return;
         }
 
         ItemStack held = player.getMainHandItem();
@@ -197,28 +173,25 @@ public final class AimbotClient implements ClientModInitializer {
         // Wurst already handles bow aiming. Kib Aim deliberately does not
         // rotate for bows, or while the player is drawing one.
         if (holdingBow) {
-            recordObservedRotation(player);
-            return;
+                        return;
         }
 
         // Keep crossbow trajectory support independent from bow aiming.
         boolean projectileAim = holdingCrossbow && crossbowAim && CrossbowItem.isCharged(held);
         if (holdingCrossbow && !projectileAim) {
-            recordObservedRotation(player);
-            return;
+                        return;
         }
 
         // Do not pull the camera while eating, drinking, blocking, or using a
-        // healing item. A charged crossbow is handled above.
-        if (player.isUsingItem()) {
-            recordObservedRotation(player);
+        // healing item. Keep charged-crossbow tracking active while it is held.
+        if (player.isUsingItem() && !projectileAim) {
             return;
         }
 
         Player target = findNearestTarget(client, player);
         if (target == null) {
-            manualOverrideActive = false;
-            recordObservedRotation(player);
+            // Keep manual override latched while no eligible target is visible.
+            // It releases only when the player's view returns near a valid target.
             return;
         }
 
@@ -232,8 +205,7 @@ public final class AimbotClient implements ClientModInitializer {
             // looks away. Resume only when the player's own view returns close
             // to the nearest target.
             if (!isLookingAt(player, target)) {
-                recordObservedRotation(player);
-                return;
+                                return;
             }
             manualOverrideActive = false;
         }
@@ -246,8 +218,7 @@ public final class AimbotClient implements ClientModInitializer {
         }
 
         rotateTowards(player, aimPoint);
-        recordObservedRotation(player);
-    }
+            }
 
     /**
      * Selects the closest eligible player by physical distance, not by how
@@ -289,37 +260,52 @@ public final class AimbotClient implements ClientModInitializer {
         }
 
         Vec3 origin = shooter.getEyePosition();
-        Vec3 directDisplacement = targetPoint.subtract(origin);
-        double distance = directDisplacement.length();
+        double distance = targetPoint.distanceTo(origin);
         if (distance < 1.0E-4) {
             return targetPoint;
         }
 
-        Vec3 targetVelocity = target.getDeltaMovement();
-        Vec3 shooterVelocity = shooter.getDeltaMovement();
+        // Client-side velocity can briefly be stale or spike during corrections.
+        // Clamp it to plausible player movement so one bad sample cannot send
+        // the crossbow aim far above the opponent.
+        Vec3 rawTargetVelocity = target.getDeltaMovement();
+        double horizontalSpeed = Math.sqrt(
+            rawTargetVelocity.x * rawTargetVelocity.x
+                + rawTargetVelocity.z * rawTargetVelocity.z
+        );
+        double horizontalScale = horizontalSpeed > 0.45 ? 0.45 / horizontalSpeed : 1.0;
+        Vec3 targetVelocity = new Vec3(
+            rawTargetVelocity.x * horizontalScale,
+            Math.max(-0.35, Math.min(0.35, rawTargetVelocity.y)),
+            rawTargetVelocity.z * horizontalScale
+        );
 
+        Vec3 shooterVelocity = shooter.getDeltaMovement();
         Vec3 inheritedVelocity = new Vec3(
             shooterVelocity.x,
             shooter.onGround() ? 0.0 : shooterVelocity.y,
             shooterVelocity.z
         );
 
-        // Do not search arbitrarily long flight times. At short ranges, the old
-        // solver could choose a near-vertical "shoot upward and wait" arc when
-        // there was no useful direct ballistic solution.
+        // Restrict the search to the expected low-arc flight time. Searching
+        // long after the arrow could plausibly arrive encourages steep arcs.
+        double estimatedFlightTicks = distance / launchSpeed;
+        int minFlightTicks = Math.max(1, (int) Math.floor(estimatedFlightTicks) - 3);
         int maxFlightTicks = Math.min(
             MAX_PROJECTILE_FLIGHT_TICKS,
-            Math.max(4, (int) Math.ceil(distance / Math.max(0.5, launchSpeed * 0.6)) + 8)
+            Math.max(minFlightTicks, (int) Math.ceil(estimatedFlightTicks) + 5)
         );
 
-        double dragSum = 0.0;
-        double dragMultiplier = 1.0;
         double bestSpeedError = Double.MAX_VALUE;
         Vec3 bestDirection = null;
 
-        for (int flightTicks = 1; flightTicks <= maxFlightTicks; flightTicks++) {
-            dragSum += dragMultiplier;
-            dragMultiplier *= PROJECTILE_DRAG;
+        for (int flightTicks = minFlightTicks; flightTicks <= maxFlightTicks; flightTicks++) {
+            double dragSum = 0.0;
+            double dragMultiplier = 1.0;
+            for (int tick = 0; tick < flightTicks; tick++) {
+                dragSum += dragMultiplier;
+                dragMultiplier *= PROJECTILE_DRAG;
+            }
 
             double gravityDrop = -ARROW_GRAVITY / (1.0 - PROJECTILE_DRAG)
                 * (flightTicks - dragSum);
@@ -341,7 +327,7 @@ public final class AimbotClient implements ClientModInitializer {
             double pitch = Math.toDegrees(Math.asin(
                 Math.max(-1.0, Math.min(1.0, requiredLaunchVelocity.y / requiredSpeed))
             ));
-            if (Math.abs(pitch) > 55.0) {
+            if (Math.abs(pitch) > 35.0) {
                 continue;
             }
 
@@ -352,10 +338,9 @@ public final class AimbotClient implements ClientModInitializer {
             }
         }
 
-        // Only use a ballistic solution when its required launch speed is
-        // reasonably close to the crossbow's actual launch speed. Otherwise,
-        // aim directly at the opponent instead of selecting an absurd arc.
-        double acceptableSpeedError = Math.max(0.12, launchSpeed * 0.10);
+        // Prefer direct target-centre aiming when no credible low-arc solution
+        // exists. The solution is recomputed every client tick as the target moves.
+        double acceptableSpeedError = Math.max(0.15, launchSpeed * 0.12);
         if (bestDirection == null || bestSpeedError > acceptableSpeedError) {
             return targetPoint;
         }
@@ -399,10 +384,19 @@ public final class AimbotClient implements ClientModInitializer {
         }
     }
 
-    private static void recordObservedRotation(LocalPlayer player) {
-        lastObservedYaw = player.getYRot();
-        lastObservedPitch = player.getXRot();
-        hasObservedRotation = true;
+    /**
+     * Called by the MouseHandler mixin with real accumulated mouse deltas.
+     * Camera changes made by Kib Aim never enter this path, so tracking a
+     * moving target cannot accidentally trigger the manual override.
+     */
+    public static void onMouseMovement(double deltaX, double deltaY) {
+        if (!autoAimOffEnabled || !enabled) return;
+        if (Math.abs(deltaX) + Math.abs(deltaY) < 1.0E-4) return;
+
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null || !client.mouseHandler.isMouseGrabbed()) return;
+
+        manualOverrideActive = true;
     }
 
     private static void notifyPlayer(Minecraft client, String message) {
