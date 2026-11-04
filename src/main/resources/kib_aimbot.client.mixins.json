@@ -2,7 +2,8 @@
   "required": true,
   "package": "com.kib.aimbot.mixin",
   "client": [
-    "MinecraftAccessor"
+    "MinecraftAccessor",
+    "MouseHandlerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

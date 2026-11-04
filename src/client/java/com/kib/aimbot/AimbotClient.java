@@ -1,13 +1,18 @@
 package com.kib.aimbot;
 
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.blaze3d.platform.InputConstants;
+import com.kib.aimbot.mixin.MinecraftAccessor;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.CrossbowItem;
 import net.minecraft.world.item.ItemStack;
@@ -15,105 +20,86 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
-import com.kib.aimbot.mixin.MinecraftAccessor;
 
 import java.util.Comparator;
 
 public final class AimbotClient implements ClientModInitializer {
-    private enum AttackMode {
-        OFF, CLICK, HIT
-    }
+    private static final double PROJECTILE_DRAG = 0.99;
+    private static final double ARROW_GRAVITY = 0.05;
+    private static final int MAX_PROJECTILE_FLIGHT_TICKS = 100;
+
+    private static final double MANUAL_REACQUIRE_COS = Math.cos(Math.toRadians(20.0));
+
+    private static final KeyMapping.Category KEY_CATEGORY = KeyMapping.Category.register(
+        Identifier.fromNamespaceAndPath("kib_aimbot", "controls")
+    );
+
+    private static KeyMapping toggleAimbotKey;
+    private static KeyMapping autoAimOffKey;
 
     private static boolean enabled = false;
-    private static boolean bowAim = true;
+    private static boolean autoAimOffEnabled = true;
+    private static boolean manualOverrideActive = false;
+    private static boolean autoAttackEnabled = false;
     private static boolean crossbowAim = true;
-    private static AttackMode attackMode = AttackMode.OFF;
 
     private static int range = 48;
-    private static int fov = 120;
     private static int smoothPercent = 65;
-    private static int clicksPerSecond = 8;
     private static int tickCounter = 0;
     private static int lastAttackTick = -100;
 
     @Override
     public void onInitializeClient() {
+        toggleAimbotKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+            "key.kib_aimbot.toggle",
+            InputConstants.Type.KEYBOARD,
+            InputConstants.KEY_R,
+            KEY_CATEGORY
+        ));
+        autoAimOffKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+            "key.kib_aimbot.pause",
+            InputConstants.Type.KEYBOARD,
+            InputConstants.KEY_V,
+            KEY_CATEGORY
+        ));
+
         ClientTickEvents.END_CLIENT_TICK.register(AimbotClient::onClientTick);
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             dispatcher.register(ClientCommands.literal("aimbot")
                 .then(ClientCommands.literal("on").executes(context -> {
                     enabled = true;
+                    manualOverrideActive = false;
                     feedback(context.getSource(), "Aimbot enabled");
                     return 1;
                 }))
                 .then(ClientCommands.literal("off").executes(context -> {
                     enabled = false;
+                    manualOverrideActive = false;
                     feedback(context.getSource(), "Aimbot disabled");
                     return 1;
                 }))
-                .then(ClientCommands.literal("status").executes(context -> {
-                    feedback(context.getSource(), status());
-                    return 1;
-                }))
-                .then(ClientCommands.literal("range")
-                    .then(ClientCommands.argument("blocks", IntegerArgumentType.integer(3, 128))
-                        .executes(context -> {
-                            range = IntegerArgumentType.getInteger(context, "blocks");
-                            feedback(context.getSource(), "Target range: " + range + " blocks");
-                            return 1;
-                        })))
-                .then(ClientCommands.literal("fov")
-                    .then(ClientCommands.argument("degrees", IntegerArgumentType.integer(5, 180))
-                        .executes(context -> {
-                            fov = IntegerArgumentType.getInteger(context, "degrees");
-                            feedback(context.getSource(), "Target FOV: " + fov + " degrees");
-                            return 1;
-                        })))
-                .then(ClientCommands.literal("smooth")
-                    .then(ClientCommands.argument("percent", IntegerArgumentType.integer(1, 100))
-                        .executes(context -> {
-                            smoothPercent = IntegerArgumentType.getInteger(context, "percent");
-                            feedback(context.getSource(), "Aim smoothing: " + smoothPercent + "%");
-                            return 1;
-                        })))
-                .then(ClientCommands.literal("cps")
-                    .then(ClientCommands.argument("rate", IntegerArgumentType.integer(1, 20))
-                        .executes(context -> {
-                            clicksPerSecond = IntegerArgumentType.getInteger(context, "rate");
-                            feedback(context.getSource(), "Auto-click rate: " + clicksPerSecond + " CPS");
-                            return 1;
-                        })))
-                .then(ClientCommands.literal("click")
+                .then(ClientCommands.literal("autooff")
                     .then(ClientCommands.literal("on").executes(context -> {
-                        attackMode = AttackMode.CLICK;
-                        feedback(context.getSource(), "Auto-click enabled");
+                        autoAimOffEnabled = true;
+                        manualOverrideActive = false;
+                            feedback(context.getSource(), "Manual mouse override enabled");
                         return 1;
                     }))
                     .then(ClientCommands.literal("off").executes(context -> {
-                        if (attackMode == AttackMode.CLICK) attackMode = AttackMode.OFF;
-                        feedback(context.getSource(), "Auto-click disabled");
+                        autoAimOffEnabled = false;
+                        manualOverrideActive = false;
+                            feedback(context.getSource(), "Manual mouse override disabled");
                         return 1;
                     })))
-                .then(ClientCommands.literal("hit")
+                .then(ClientCommands.literal("attack")
                     .then(ClientCommands.literal("on").executes(context -> {
-                        attackMode = AttackMode.HIT;
-                        feedback(context.getSource(), "Auto-hit enabled (melee reach only)");
+                        autoAttackEnabled = true;
+                        feedback(context.getSource(), "Vanilla-reach auto-attack enabled");
                         return 1;
                     }))
                     .then(ClientCommands.literal("off").executes(context -> {
-                        if (attackMode == AttackMode.HIT) attackMode = AttackMode.OFF;
-                        feedback(context.getSource(), "Auto-hit disabled");
-                        return 1;
-                    })))
-                .then(ClientCommands.literal("bow")
-                    .then(ClientCommands.literal("on").executes(context -> {
-                        bowAim = true;
-                        feedback(context.getSource(), "Bow prediction enabled");
-                        return 1;
-                    }))
-                    .then(ClientCommands.literal("off").executes(context -> {
-                        bowAim = false;
-                        feedback(context.getSource(), "Bow prediction disabled");
+                        autoAttackEnabled = false;
+                        feedback(context.getSource(), "Auto-attack disabled");
                         return 1;
                     })))
                 .then(ClientCommands.literal("crossbow")
@@ -127,106 +113,233 @@ public final class AimbotClient implements ClientModInitializer {
                         feedback(context.getSource(), "Crossbow prediction disabled");
                         return 1;
                     })))
+                .then(ClientCommands.literal("status").executes(context -> {
+                    feedback(context.getSource(), status());
+                    return 1;
+                }))
+                .then(ClientCommands.literal("range")
+                    .then(ClientCommands.argument("blocks", IntegerArgumentType.integer(3, 128))
+                        .executes(context -> {
+                            range = IntegerArgumentType.getInteger(context, "blocks");
+                            feedback(context.getSource(), "Target range: " + range + " blocks");
+                            return 1;
+                        })))
+                .then(ClientCommands.literal("smooth")
+                    .then(ClientCommands.argument("percent", IntegerArgumentType.integer(1, 100))
+                        .executes(context -> {
+                            smoothPercent = IntegerArgumentType.getInteger(context, "percent");
+                            feedback(context.getSource(), "Aim smoothing: " + smoothPercent + "%");
+                            return 1;
+                        })))
             );
         });
     }
 
     private static void onClientTick(Minecraft client) {
         tickCounter++;
-        if (!enabled || client.player == null || client.level == null || client.gameMode == null) {
+
+        if (client.player == null || client.gui.screen() != null) {
             return;
         }
 
         LocalPlayer player = client.player;
+
+        while (toggleAimbotKey.consumeClick()) {
+            enabled = !enabled;
+            manualOverrideActive = false;
+            notifyPlayer(client, "Aimbot " + (enabled ? "enabled" : "disabled"));
+        }
+
+        while (autoAimOffKey.consumeClick()) {
+            autoAimOffEnabled = !autoAimOffEnabled;
+            manualOverrideActive = false;
+            notifyPlayer(client, autoAimOffEnabled
+                ? "Auto Aimbot Off enabled — manual mouse movement overrides aiming"
+                : "Auto Aimbot Off disabled — continuous aiming enabled");
+        }
+
+        if (!enabled || client.level == null || client.gameMode == null) {
+            return;
+        }
+
         ItemStack held = player.getMainHandItem();
         boolean holdingBow = held.is(Items.BOW);
         boolean holdingCrossbow = held.is(Items.CROSSBOW);
 
-        boolean projectileAim = false;
-        double projectileSpeed = 0.0;
-
-        if (holdingBow && bowAim && player.isUsingItem() && player.getUseItem().is(Items.BOW)) {
-            double draw = Math.min(1.0, player.getTicksUsingItem() / 20.0);
-            double power = (draw * draw + 2.0 * draw) / 3.0;
-            projectileSpeed = power * 3.0;
-            projectileAim = projectileSpeed > 0.15;
-        } else if (holdingCrossbow && crossbowAim && CrossbowItem.isCharged(held)) {
-            projectileSpeed = 3.15;
-            projectileAim = true;
-        }
-
-        // Do not try melee auto-attacks while holding a ranged weapon.
-        if ((holdingBow || holdingCrossbow) && !projectileAim) {
+        // Wurst already handles bow aiming. Kib Aim deliberately does not
+        // rotate for bows, or while the player is drawing one.
+        if (holdingBow) {
             return;
         }
 
-        Player target = findTarget(client, player);
-        if (target == null) return;
-
-        Vec3 aimPoint = target.position().add(0.0, target.getBbHeight() * 0.78, 0.0);
-        if (projectileAim) {
-            aimPoint = predictProjectileAim(player, target, aimPoint, projectileSpeed);
+        // Keep crossbow trajectory support independent from bow aiming.
+        boolean projectileAim = holdingCrossbow && crossbowAim && CrossbowItem.isCharged(held);
+        if (holdingCrossbow && !projectileAim) {
+            return;
         }
 
-        rotateTowards(player, aimPoint);
+        // Do not pull the camera while eating, drinking, blocking, or using a
+        // healing item. A charged crossbow can continue tracking while held.
+        if (player.isUsingItem() && !projectileAim) {
+            return;
+        }
 
+        Player target = findNearestTarget(client, player);
+        if (target == null) {
+            // Keep manual override latched while no eligible target is visible.
+            // It releases only when the player's view returns near a valid target.
+            return;
+        }
+
+        Vec3 aimPoint = target.position().add(0.0, target.getBbHeight() * 0.55, 0.0);
+        if (projectileAim) {
+            aimPoint = predictProjectileAim(player, target, aimPoint, 3.15);
+        }
+
+        if (manualOverrideActive) {
+            // Manual input suspends camera tracking. Reacquisition is based on
+            // the target centre, not the predicted projectile lead point.
+            if (!isLookingAt(player, target)) {
+                return;
+            }
+            manualOverrideActive = false;
+        }
+
+        // Auto-attack remains optional and OFF by default. It uses Minecraft's
+        // regular attack entry point; it does not manipulate network packets.
         if (!projectileAim) {
             tryAutoAttack(client, player, target);
         }
+
+        rotateTowards(player, aimPoint);
     }
 
-    private static Player findTarget(Minecraft client, LocalPlayer player) {
+    /**
+     * Selects the closest eligible player by physical distance, not by how
+     * close that player is to the current crosshair. Thus looking at a distant
+     * player cannot steal the target from a nearer visible player.
+     */
+    private static Player findNearestTarget(Minecraft client, LocalPlayer player) {
         AABB searchBox = player.getBoundingBox().inflate(range);
-        Vec3 eye = player.getEyePosition();
-        Vec3 look = player.getViewVector(1.0F).normalize();
-        double minimumDot = Math.cos(Math.toRadians(fov / 2.0));
 
         return client.level.getEntitiesOfClass(Player.class, searchBox, candidate ->
                 candidate != player
                     && candidate.isAlive()
                     && !candidate.isSpectator()
+                    && player.distanceToSqr(candidate) <= (double) range * range
                     && player.hasLineOfSight(candidate)
                     && !candidate.isInvisibleTo(player)
                     && !player.isAlliedTo(candidate)
             ).stream()
-            .filter(candidate -> {
-                Vec3 direction = candidate.position()
-                    .add(0.0, candidate.getBbHeight() * 0.65, 0.0)
-                    .subtract(eye)
-                    .normalize();
-                return direction.dot(look) >= minimumDot;
-            })
-            .min(Comparator.comparingDouble(candidate -> targetScore(player, candidate, eye, look)))
+            .min(Comparator.comparingDouble(player::distanceToSqr))
             .orElse(null);
     }
 
-    private static double targetScore(LocalPlayer player, Player target, Vec3 eye, Vec3 look) {
-        Vec3 direction = target.position()
-            .add(0.0, target.getBbHeight() * 0.65, 0.0)
-            .subtract(eye)
-            .normalize();
-        double angleCost = 1.0 - Math.max(-1.0, Math.min(1.0, direction.dot(look)));
-        return angleCost * 100.0 + player.distanceTo(target);
+    private static boolean isLookingAt(LocalPlayer player, Player target) {
+        // Reacquire against the opponent's visible centre, not the calculated
+        // ballistic aim point (which can sit above the target).
+        Vec3 targetCentre = target.position().add(0.0, target.getBbHeight() * 0.55, 0.0);
+        Vec3 direction = targetCentre.subtract(player.getEyePosition()).normalize();
+        Vec3 look = player.getViewVector(1.0F).normalize();
+        return look.dot(direction) >= MANUAL_REACQUIRE_COS;
     }
 
     /**
-     * Leads the target by its velocity relative to the shooter and compensates for
-     * the arrow's approximate gravity and air drag. Time is estimated in game ticks.
+     * Leads a moving crossbow target and approximates arrow drag, gravity, and
+     * shooter velocity. Bow prediction is intentionally omitted; Wurst owns it.
      */
     private static Vec3 predictProjectileAim(LocalPlayer shooter, Player target, Vec3 targetPoint, double launchSpeed) {
-        double distance = shooter.getEyePosition().distanceTo(targetPoint);
-        double travelled = 0.0;
-        int flightTicks = 1;
-
-        for (; flightTicks < 80; flightTicks++) {
-            travelled += launchSpeed * Math.pow(0.99, flightTicks - 1);
-            if (travelled >= distance) break;
+        if (!Double.isFinite(launchSpeed) || launchSpeed <= 0.05) {
+            return targetPoint;
         }
 
-        Vec3 relativeVelocity = target.getDeltaMovement().subtract(shooter.getDeltaMovement());
-        Vec3 lead = targetPoint.add(relativeVelocity.scale(flightTicks));
-        double gravityCompensation = 0.5 * 0.05 * flightTicks * flightTicks;
-        return lead.add(0.0, gravityCompensation, 0.0);
+        Vec3 origin = shooter.getEyePosition();
+        double distance = targetPoint.distanceTo(origin);
+        if (distance < 1.0E-4) {
+            return targetPoint;
+        }
+
+        // Client-side velocity can briefly be stale or spike during corrections.
+        // Clamp it to plausible player movement so one bad sample cannot send
+        // the crossbow aim far above the opponent.
+        Vec3 rawTargetVelocity = target.getDeltaMovement();
+        double horizontalSpeed = Math.sqrt(
+            rawTargetVelocity.x * rawTargetVelocity.x
+                + rawTargetVelocity.z * rawTargetVelocity.z
+        );
+        double horizontalScale = horizontalSpeed > 0.45 ? 0.45 / horizontalSpeed : 1.0;
+        Vec3 targetVelocity = new Vec3(
+            rawTargetVelocity.x * horizontalScale,
+            Math.max(-0.35, Math.min(0.35, rawTargetVelocity.y)),
+            rawTargetVelocity.z * horizontalScale
+        );
+
+        Vec3 shooterVelocity = shooter.getDeltaMovement();
+        Vec3 inheritedVelocity = new Vec3(
+            shooterVelocity.x,
+            shooter.onGround() ? 0.0 : shooterVelocity.y,
+            shooterVelocity.z
+        );
+
+        // Restrict the search to the expected low-arc flight time. Searching
+        // long after the arrow could plausibly arrive encourages steep arcs.
+        double estimatedFlightTicks = distance / launchSpeed;
+        int minFlightTicks = Math.max(1, (int) Math.floor(estimatedFlightTicks) - 3);
+        int maxFlightTicks = Math.min(
+            MAX_PROJECTILE_FLIGHT_TICKS,
+            Math.max(minFlightTicks, (int) Math.ceil(estimatedFlightTicks) + 5)
+        );
+
+        double bestSpeedError = Double.MAX_VALUE;
+        Vec3 bestDirection = null;
+
+        for (int flightTicks = minFlightTicks; flightTicks <= maxFlightTicks; flightTicks++) {
+            double dragSum = 0.0;
+            double dragMultiplier = 1.0;
+            for (int tick = 0; tick < flightTicks; tick++) {
+                dragSum += dragMultiplier;
+                dragMultiplier *= PROJECTILE_DRAG;
+            }
+
+            double gravityDrop = -ARROW_GRAVITY / (1.0 - PROJECTILE_DRAG)
+                * (flightTicks - dragSum);
+
+            Vec3 futureTarget = targetPoint.add(targetVelocity.scale(flightTicks));
+            Vec3 inheritedDisplacement = inheritedVelocity.scale(dragSum);
+
+            Vec3 requiredDisplacement = futureTarget
+                .subtract(origin)
+                .subtract(inheritedDisplacement)
+                .subtract(0.0, gravityDrop, 0.0);
+
+            Vec3 requiredLaunchVelocity = requiredDisplacement.scale(1.0 / dragSum);
+            double requiredSpeed = requiredLaunchVelocity.length();
+            if (requiredSpeed <= 1.0E-8) {
+                continue;
+            }
+
+            double pitch = Math.toDegrees(Math.asin(
+                Math.max(-1.0, Math.min(1.0, requiredLaunchVelocity.y / requiredSpeed))
+            ));
+            if (Math.abs(pitch) > 35.0) {
+                continue;
+            }
+
+            double speedError = Math.abs(requiredSpeed - launchSpeed);
+            if (speedError < bestSpeedError) {
+                bestSpeedError = speedError;
+                bestDirection = requiredLaunchVelocity.scale(1.0 / requiredSpeed);
+            }
+        }
+
+        // Prefer direct target-centre aiming when no credible low-arc solution
+        // exists. The solution is recomputed every client tick as the target moves.
+        double acceptableSpeedError = Math.max(0.15, launchSpeed * 0.12);
+        if (bestDirection == null || bestSpeedError > acceptableSpeedError) {
+            return targetPoint;
+        }
+
+        return origin.add(bestDirection.scale(16.0));
     }
 
     private static void rotateTowards(LocalPlayer player, Vec3 target) {
@@ -247,30 +360,42 @@ public final class AimbotClient implements ClientModInitializer {
     }
 
     private static void tryAutoAttack(Minecraft client, LocalPlayer player, Player target) {
-        if (attackMode == AttackMode.OFF || !player.hasLineOfSight(target)) return;
-
-        // Match vanilla's input preconditions. Never attack while a screen is open
-        // or the game does not have mouse focus.
+        if (!autoAttackEnabled || !player.hasLineOfSight(target)) return;
         if (client.gui.screen() != null || !client.mouseHandler.isMouseGrabbed()) return;
 
-        // Crucially, only request an attack when Minecraft's own current raycast
-        // has selected this exact player. The raycast applies normal entity reach.
+        // Only use Minecraft's current vanilla raycast result. startAttack()
+        // then applies the ordinary weapon cooldown and interaction-range rules.
         if (!(client.hitResult instanceof EntityHitResult entityHit)
                 || entityHit.getEntity() != target) {
             return;
         }
 
         if (player.isUsingItem() || player.getAttackStrengthScale(0.5F) < 0.92F) return;
-
-        // Auto-hit checks each tick; auto-click follows the configured attempt rate.
-        // Both use the same vanilla attack routine and therefore the same reach rules.
-        int interval = attackMode == AttackMode.HIT
-                ? 1
-                : Math.max(1, 20 / clicksPerSecond);
-        if (tickCounter - lastAttackTick < interval) return;
+        if (tickCounter - lastAttackTick < 1) return;
 
         if (((MinecraftAccessor) (Object) client).kib$invokeStartAttack()) {
             lastAttackTick = tickCounter;
+        }
+    }
+
+    /**
+     * Called by the MouseHandler mixin with real accumulated mouse deltas.
+     * Camera changes made by Kib Aim never enter this path, so tracking a
+     * moving target cannot accidentally trigger the manual override.
+     */
+    public static void onMouseMovement(double deltaX, double deltaY) {
+        if (!autoAimOffEnabled || !enabled) return;
+        if (Math.abs(deltaX) + Math.abs(deltaY) < 1.0E-4) return;
+
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null || !client.mouseHandler.isMouseGrabbed()) return;
+
+        manualOverrideActive = true;
+    }
+
+    private static void notifyPlayer(Minecraft client, String message) {
+        if (client.player != null) {
+            client.player.sendSystemMessage(Component.literal("[Kib Aimbot] " + message));
         }
     }
 
@@ -283,13 +408,12 @@ public final class AimbotClient implements ClientModInitializer {
 
     private static String status() {
         return "Aimbot " + (enabled ? "ON" : "OFF")
-            + " | range " + range
-            + " | FOV " + fov
+            + " | manual override " + (autoAimOffEnabled ? "ON" : "OFF")
+            + " | override active " + (manualOverrideActive ? "YES" : "NO")
+            + " | nearest-target range " + range
             + " | smooth " + smoothPercent + "%"
-            + " | attack " + attackMode.name().toLowerCase()
-            + " | bow " + (bowAim ? "ON" : "OFF")
-            + " | crossbow " + (crossbowAim ? "ON" : "OFF")
-            + " | " + clicksPerSecond + " CPS";
+            + " | auto-attack " + (autoAttackEnabled ? "ON" : "OFF")
+            + " | crossbow " + (crossbowAim ? "ON" : "OFF");
     }
 
     private static void feedback(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource source, String message) {
