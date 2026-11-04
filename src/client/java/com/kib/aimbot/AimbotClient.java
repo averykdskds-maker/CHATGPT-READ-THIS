@@ -32,6 +32,8 @@ public final class AimbotClient implements ClientModInitializer {
     private static int range = 48;
     private static int fov = 120;
     private static int smoothPercent = 65;
+    private static Double originalMouseSensitivity = null;
+    private static int cameraSensitivityPercent = 100;
     private static int clicksPerSecond = 8;
     private static int tickCounter = 0;
     private static int lastAttackTick = -100;
@@ -76,6 +78,29 @@ public final class AimbotClient implements ClientModInitializer {
                             feedback(context.getSource(), "Aim smoothing: " + smoothPercent + "%");
                             return 1;
                         })))
+                .then(ClientCommands.literal("camera")
+                    .then(ClientCommands.argument("percent", IntegerArgumentType.integer(1, 100))
+                        .executes(context -> {
+                            Minecraft minecraft = Minecraft.getInstance();
+                            if (originalMouseSensitivity == null) {
+                                originalMouseSensitivity = minecraft.options.sensitivity().get();
+                            }
+                            cameraSensitivityPercent = IntegerArgumentType.getInteger(context, "percent");
+                            minecraft.options.sensitivity().set(originalMouseSensitivity * (cameraSensitivityPercent / 100.0));
+                            feedback(context.getSource(), "Manual mouse-look sensitivity: " + cameraSensitivityPercent + "% of the original setting");
+                            return 1;
+                        }))
+                    .then(ClientCommands.literal("reset").executes(context -> {
+                        if (originalMouseSensitivity == null) {
+                            feedback(context.getSource(), "Manual mouse-look sensitivity has not been changed by Kib Aimbot");
+                        } else {
+                            Minecraft.getInstance().options.sensitivity().set(originalMouseSensitivity);
+                            originalMouseSensitivity = null;
+                            cameraSensitivityPercent = 100;
+                            feedback(context.getSource(), "Manual mouse-look sensitivity restored");
+                        }
+                        return 1;
+                    })))
                 .then(ClientCommands.literal("cps")
                     .then(ClientCommands.argument("rate", IntegerArgumentType.integer(1, 20))
                         .executes(context -> {
@@ -286,6 +311,7 @@ public final class AimbotClient implements ClientModInitializer {
             + " | range " + range
             + " | FOV " + fov
             + " | smooth " + smoothPercent + "%"
+            + " | manual camera sensitivity " + cameraSensitivityPercent + "%"
             + " | attack " + attackMode.name().toLowerCase()
             + " | bow " + (bowAim ? "ON" : "OFF")
             + " | crossbow " + (crossbowAim ? "ON" : "OFF")
