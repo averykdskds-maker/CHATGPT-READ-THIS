@@ -34,6 +34,6 @@ jobs:
       - name: Upload mod JAR
         uses: actions/upload-artifact@v6
         with:
-          name: kib-aimbot-mc26.3-v1.0.3
-          path: build/libs/kib-aimbot-1.0.3.jar
+          name: kib-aimbot-mc26.3-v1.0.4
+          path: build/libs/kib-aimbot-1.0.4.jar
           if-no-files-found: error
